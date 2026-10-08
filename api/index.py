@@ -40,7 +40,16 @@ async def app(scope, receive, send):
     if scope.get("type") != "http":
         return
     method = scope.get("method", "GET").upper()
-    path = (scope.get("path") or "/").rstrip("/") or "/"
+    # Vercel may hand us the browser URL path ("/mcp") or the function
+    # mount path ("/api/index", "/api/index/mcp"). Normalize both to the
+    # browser-style path so routing works either way.
+    full = (scope.get("root_path") or "") + (scope.get("path") or "/")
+    path = full
+    for prefix in ("/api/index", "/api"):
+        if path == prefix or path.startswith(prefix + "/"):
+            path = path[len(prefix):] or "/"
+            break
+    path = path.rstrip("/") or "/"
 
     body = b""
     while True:
