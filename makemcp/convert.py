@@ -60,7 +60,15 @@ def load_python_target(target: str):
     """
     import importlib.util
 
-    name, _, attr = target.partition(":")
+    import os
+    # Split "target[:attr]" on the LAST colon so Windows paths (C:\...)
+    # are not cut at the drive letter.
+    if os.path.isfile(target):
+        name, attr = target, ""
+    elif ":" in target:
+        name, attr = target.rsplit(":", 1)
+    else:
+        name, attr = target, ""
     if name.endswith(".py"):
         import os
         path = os.path.abspath(name)

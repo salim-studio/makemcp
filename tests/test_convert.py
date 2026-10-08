@@ -19,19 +19,19 @@ from makemcp.convert import (
 SAMPLE = "examples/sample_app.py"
 
 # 1) Python source -----------------------------------------------------------
-app = python_to_app(SAMPLE, name="sample")
-names = sorted(app._tools)
+py_app = python_to_app(SAMPLE, name="sample")
+names = sorted(py_app._tools)
 assert names == ["add", "fetch_title", "shout"], names
-assert app._tools["add"].schema["required"] == ["a", "b"]
-assert app._tools["shout"].schema["properties"]["times"].get("default") == 1
+assert py_app._tools["add"].schema["required"] == ["a", "b"]
+assert py_app._tools["shout"].schema["properties"]["times"].get("default") == 1
 
 
 async def _call(a, tool, args):
     return await a.call_tool(tool, args)
 
 
-assert asyncio.run(_call(app, "add", {"a": 2, "b": 3})) == 5
-assert asyncio.run(_call(app, "shout", {"text": "hi", "times": 2})) == "HI HI"
+assert asyncio.run(_call(py_app, "add", {"a": 2, "b": 3})) == 5
+assert asyncio.run(_call(py_app, "shout", {"text": "hi", "times": 2})) == "HI HI"
 
 info = analyze_target(SAMPLE)
 assert info["tool_count"] == 3 and info["name"].startswith("py:"), info

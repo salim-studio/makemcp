@@ -9,7 +9,14 @@ from .banner import COPYRIGHT
 
 def _load(target: str):
     """target: file.py[:app] or module[:app]"""
-    name, _, attr = target.partition(":")
+    import os
+    # Split on the LAST colon so Windows paths (C:\...) survive.
+    if os.path.isfile(target):
+        name, attr = target, ""
+    elif ":" in target:
+        name, attr = target.rsplit(":", 1)
+    else:
+        name, attr = target, ""
     attr = attr or "mcp"
     if name.endswith(".py"):
         spec = importlib.util.spec_from_file_location("_mkcli", name)

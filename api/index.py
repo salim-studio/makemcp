@@ -1,0 +1,99 @@
+"""Vercel serverless entrypoint: ``app`` is a dependency-free ASGI application.
+
+Routes:
+    GET  /            -> converter web UI
+    GET  /health      -> {"ok": true}
+    POST /api/analyze /api/test /api/generate -> converter backend
+    POST /mcp         -> JSON-RPC 2.0 to the bundled demo MCP server
+    GET  /mcp         -> server info + tool list (discovery)
+"""
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from makemcp.ui import PAGE, api_analyze, api_generate, api_test  # noqa: E402
+
+_DEMO = None
+
+
+def _demo_app():
+    global _DEMO
+    if _DEMO is None:
+        from makemcp.convert import python_to_app
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        _DEMO = python_to_app(os.path.join(root, "examples", "sample_app.py"),
+                              name="makemcp-demo")
+    return _DEMO
+
+
+def _json_body(obj) -> bytes:
+    try:
+        return json.dumps(obj, ensure_ascii=False).encode()
+    except (TypeError, ValueError):
+        return json.dumps({"result": str(obj)}).encode()
+
+
+async def app(scope, receive, send):
+    if scope.get("type") != "http":
+        return
+    method = scope.get("method", "GET").upper()
+    path = (scope.get("path") or "/").rstrip("/") or "/"
+
+    body = b""
+    while True:
+        event = await receive()
+        body += event.get("body", b"")
+        if not event.get("more_body"):
+            break
+
+    async def respond(status: int, payload: bytes, ctype: str):
+        await send({"type": "http.response.start",
+                    "status": status,
+                    "headers": [(b"content-type", ctype.encode()),
+                                (b"content-length", str(len(payload)).encode()),
+                                (b"access-control-allow-origin", b"*")]})
+        await send({"type": "http.response.body", "body": payload})
+
+    ok = lambda obj: respond(200, _json_body(obj), "application/json")  # noqa: E731
+    err = lambda msg: respond(200, _json_body({"error": str(msg)}),  # noqa: E731
+                              "application/json")
+
+    try:
+        if method == "GET" and path in ("/", "/index.html"):
+            return await respond(200, PAGE.encode(), "text/html; charset=utf-8")
+        if method == "GET" and path == "/health":
+            return await ok({"ok": True})
+        if method == "GET" and path == "/mcp":
+            demo = _demo_app()
+            return await ok({"name": demo.name, "version": demo.version,
+                             "tools": [t.to_dict() for t in demo._tools.values()]})
+        if method == "POST" and path in ("/api/analyze", "/api/test",
+                                         "/api/generate", "/mcp"):
+            try:
+                payload = json.loads(body.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                return await err("invalid JSON")
+            if path == "/api/analyze":
+                return await ok(api_analyze(payload.get("config") or {}))
+            if path == "/api/generate":
+                return await ok(api_generate(payload.get("config") or {}))
+            if path == "/api/test":
+                res = await api_test(payload.get("config") or {},
+                                     payload.get("tool", ""),
+                                     payload.get("args") or {})
+                return await respond(200, _json_body({"result": res}),
+                                     "application/json")
+            # POST /mcp -> JSON-RPC dispatch
+            demo = _demo_app()
+            if isinstance(payload, list):
+                out = [await demo.handle(m) for m in payload]
+                return await ok([o for o in out if o is not None])
+            resp = await demo.handle(payload)
+            return await ok(resp if resp is not None else {})
+        return await respond(404, _json_body({"error": "not found"}),
+                             "application/json")
+    except Exception as e:
+        return await err(e)

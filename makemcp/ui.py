@@ -129,9 +129,43 @@ def _config_from(payload: dict) -> dict:
     return cfg
 
 
+def api_analyze(config: dict) -> dict:
+    """Shared handler: describe the tools a config would produce."""
+    from .convert import analyze_target, config_to_app
+
+    if len(config["sources"]) == 1 and config["sources"][0].get("kind") != "command":
+        s = config["sources"][0]
+        out = analyze_target(s.get("target", ""),
+                             kind=s.get("kind", "auto"),
+                             **{k: v for k, v in s.items()
+                                if k not in ("kind", "target")})
+        out["name"] = config.get("name", out["name"])
+        return out
+    app = config_to_app(config)
+    return {"name": config.get("name", app.name),
+            "tool_count": len(app._tools),
+            "tools": [{"name": t.name, "description": t.description,
+                       "inputSchema": t.schema}
+                      for t in app._tools.values()]}
+
+
+async def api_test(config: dict, tool: str, args: dict):
+    """Shared handler: build the app and call one tool (for testing)."""
+    from .convert import config_to_app
+
+    app = config_to_app(config)
+    return await app.call_tool(tool, args or {})
+
+
+def api_generate(config: dict) -> dict:
+    """Shared handler: render a standalone server.py for a config."""
+    from .convert import render_server_module
+
+    return {"code": render_server_module(config)}
+
+
 def serve_ui(host: str = "127.0.0.1", port: int = 8080):
     from . import _json as J
-    from .convert import analyze_target, config_to_app, render_server_module
 
     loop = asyncio.new_event_loop()
     threading.Thread(target=loop.run_forever, daemon=True).start()
@@ -169,33 +203,17 @@ def serve_ui(host: str = "127.0.0.1", port: int = 8080):
                 return self._send(J.dumps({"error": "invalid JSON"}))
             try:
                 if path == "/api/analyze":
-                    cfg = _config_from(payload)
-                    if len(cfg["sources"]) == 1 and cfg["sources"][0].get("kind") != "command":
-                        s = cfg["sources"][0]
-                        out = analyze_target(s.get("target", ""),
-                                             kind=s.get("kind", "auto"),
-                                             **{k: v for k, v in s.items()
-                                                if k not in ("kind", "target")})
-                        out["name"] = cfg.get("name", out["name"])
-                    else:
-                        app = config_to_app(cfg)
-                        out = {"name": cfg.get("name", app.name),
-                               "tool_count": len(app._tools),
-                               "tools": [{"name": t.name, "description": t.description,
-                                          "inputSchema": t.schema}
-                                         for t in app._tools.values()]}
-                    return self._send(J.dumps(out))
+                    return self._send(J.dumps(api_analyze(_config_from(payload))))
                 if path == "/api/test":
-                    app = config_to_app(_config_from(payload))
-                    res = run(app.call_tool(payload.get("tool", ""),
-                                            payload.get("args") or {}))
+                    res = run(api_test(_config_from(payload),
+                                       payload.get("tool", ""),
+                                       payload.get("args") or {}))
                     try:
                         return self._send(J.dumps({"result": res}))
                     except (TypeError, ValueError):
                         return self._send(json.dumps({"result": str(res)}).encode())
                 if path == "/api/generate":
-                    code = render_server_module(_config_from(payload))
-                    return self._send(J.dumps({"code": code}))
+                    return self._send(J.dumps(api_generate(_config_from(payload))))
                 self.send_response(404)
                 self.end_headers()
             except Exception as e:

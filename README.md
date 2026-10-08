@@ -189,6 +189,37 @@ examples/           demo server + sample convertible app
 tests/              smoke + performance + conversion tests
 ```
 
+## Deploy on Vercel
+
+The repo ships with a dependency-free ASGI entrypoint (`api/index.py`), so it
+deploys as-is — no adapter or extra service needed:
+
+```bash
+vercel --prod
+```
+
+What you get on your `*.vercel.app` domain:
+
+| Route | Purpose |
+|-------|---------|
+| `GET /` | converter web UI (analyze → test → generate `server.py`) |
+| `GET /health` | health check |
+| `POST /mcp` | JSON-RPC 2.0 to the bundled demo MCP server (single or batch) |
+| `GET /mcp` | server info + tool list |
+| `POST /api/analyze|test|generate` | converter backend |
+
+```bash
+curl -X POST https://YOUR-APP.vercel.app/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+       "params":{"name":"add","arguments":{"a":20,"b":22}}}'
+```
+
+> Note: serverless functions are stateless and short-lived — ideal for the
+> converter UI and request/response MCP calls. Long-lived transports
+> (stdio, persistent SSE streams) still need a regular server
+> (`mcp.run("http")` on any VPS/container).
+
 ## License
 
 MIT — Copyright (c) 2026 salim-slimani. See [LICENSE](LICENSE).
