@@ -76,5 +76,14 @@ async def main():
     assert json.loads(d)["tool_count"] == 3, d[:120]
     print("API routes OK")
 
+    # ... and through plain browser paths (must NOT be stripped to /analyze)
+    for route in ("/api/analyze", "/api/test", "/api/generate"):
+        body = cfg if route != "/api/test" else \
+            {**cfg, "tool": "shout", "args": {"text": "hey"}}
+        s, d = await _call("POST", route, body)
+        assert s == 200 and "error" not in json.loads(d), (route, d[:160])
+    assert json.loads(d)["code"].find("mcp.run") >= 0
+    print("plain /api/* routes OK")
+
 asyncio.run(main())
 print("ALL VERCEL TESTS PASSED")

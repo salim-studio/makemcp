@@ -43,12 +43,13 @@ async def app(scope, receive, send):
     # Vercel may hand us the browser URL path ("/mcp") or the function
     # mount path ("/api/index", "/api/index/mcp"). Normalize both to the
     # browser-style path so routing works either way.
+    # NOTE: only the full "/api/index" mount prefix is stripped — never a
+    # bare "/api", because the converter backend really lives there
+    # ("/api/analyze", "/api/test", "/api/generate").
     full = (scope.get("root_path") or "") + (scope.get("path") or "/")
     path = full
-    for prefix in ("/api/index", "/api"):
-        if path == prefix or path.startswith(prefix + "/"):
-            path = path[len(prefix):] or "/"
-            break
+    if path == "/api/index" or path.startswith("/api/index/"):
+        path = path[len("/api/index"):] or "/"
     path = path.rstrip("/") or "/"
 
     body = b""
