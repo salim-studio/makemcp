@@ -71,9 +71,9 @@ overflow:auto;max-height:340px;font-size:13px;white-space:pre-wrap}
 
 <div id="p-gh" style="display:none">
 <label>GitHub repo URL or shorthand (only convert repos you trust)</label>
-<input id="gh-target" value="psf/requests"/>
+<input id="gh-target" value="salim-studio/makemcp"/>
 <label>Branch / tag (optional, blank = default branch)</label><input id="gh-ref" value=""/>
-<label>Subdirectory (optional)</label><input id="gh-subdir" value=""/>
+<label>Subdirectory (optional)</label><input id="gh-subdir" value="examples"/>
 </div>
 
 <label>Server name</label><input id="srv-name" value="my-mcp"/>
@@ -81,6 +81,7 @@ overflow:auto;max-height:340px;font-size:13px;white-space:pre-wrap}
 <button class="go" onclick="analyze()">1 · Analyze</button>
 <button class="ghost" onclick="gen()">2 · Generate server.py</button>
 <button class="ghost" onclick="dl()">Download</button>
+<button class="ghost" onclick="example()">Try working example</button>
 </div></div>
 
 <div class="card"><h3>Discovered tools</h3><pre id="out-tools">Press Analyze…</pre>
@@ -109,7 +110,16 @@ const d=document.getElementById('gh-subdir').value;if(d)s.subdir=d;
 return{name,sources:[s]};}
 return{name,sources:[{kind:'command',tools:JSON.parse(document.getElementById('cmd-tools').value)}]};}
 async function post(p,b){const r=await fetch(p,{method:'POST',
-headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});return r.json();}
+headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+let j;try{j=await r.json();}catch(e){return{error:'HTTP '+r.status+' at '+p};}
+if(!r.ok&&!j.error)j.error='HTTP '+r.status+' at '+p;return j;}
+async function example(){tab('gh');
+document.getElementById('gh-target').value='salim-studio/makemcp';
+document.getElementById('gh-ref').value='';
+document.getElementById('gh-subdir').value='examples';
+document.getElementById('srv-name').value='makemcp-self';
+document.getElementById('out-tools').textContent='Converting salim-studio/makemcp …';
+await analyze();}
 async function analyze(){const c=cfg();LASTCFG=c;
 const r=await post('/api/analyze',{config:c});
 const el=document.getElementById('out-tools');

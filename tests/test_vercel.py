@@ -85,5 +85,10 @@ async def main():
     assert json.loads(d)["code"].find("mcp.run") >= 0
     print("plain /api/* routes OK")
 
+    # one-click working example is embedded in the UI page
+    from makemcp.ui import PAGE
+    assert "Try working example" in PAGE and "salim-studio/makemcp" in PAGE
+    print("embedded example OK")
+
 asyncio.run(main())
 print("ALL VERCEL TESTS PASSED")
