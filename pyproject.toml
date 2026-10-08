@@ -1,12 +1,12 @@
 [project]
 name = "makemcp"
 version = "1.0.0"
-description = "MakeMCP — fast, stdlib-only, practical MCP framework (tools/resources/prompts + stdio/HTTP/SSE + client + CLI)"
+description = "MakeMCP — a minimal, dependency-free MCP framework (tools/resources/prompts + stdio/HTTP/SSE + client + CLI)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "makemcp" }]
-keywords = ["mcp", "llm", "tools", "model-context-protocol", "fastmcp-alternative"]
+authors = [{ name = "salim-slimani" }]
+keywords = ["mcp", "llm", "tools", "model-context-protocol", "ai-agents"]
 dependencies = []
 
 [project.optional-dependencies]

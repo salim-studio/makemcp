@@ -1,8 +1,10 @@
-"""makemcp CLI: run / inspect / dev (zero deps, argparse only)."""
+"""makemcp CLI: run / inspect / version (zero deps, argparse only)."""
 from __future__ import annotations
 import argparse
 import importlib.util
 import sys
+
+from .banner import COPYRIGHT
 
 
 def _load(target: str):
@@ -23,7 +25,11 @@ def _load(target: str):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser("makemcp", description="MakeMCP: fast MCP servers & clients")
+    p = argparse.ArgumentParser(
+        "makemcp",
+        description="MakeMCP: build MCP servers & clients.",
+        epilog=f"{COPYRIGHT} · MIT",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="run a server file")

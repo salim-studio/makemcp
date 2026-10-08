@@ -1,6 +1,6 @@
 """MakeMCP server: tools/resources/prompts + JSON-RPC dispatch + transports.
 
-Design goals vs fastmcp:
+Design principles:
 - zero mandatory dependencies (stdlib only)
 - sync functions run inline (no event-loop hop), async awaited directly
 - precomputed schemas, dict lookups, optional result caching
@@ -431,6 +431,6 @@ class MakeMCP:
         else:
             raise ValueError(f"unknown transport {transport}")
 
-    # alias like fastmcp
+    # convenience alias
     def run_stdio(self):
         return self.run("stdio")

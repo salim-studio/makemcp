@@ -112,7 +112,9 @@ def serve_http(app, host="127.0.0.1", port=8000, path="/mcp", log_level="warning
 
     srv = ThreadingHTTPServer((host, port), H)
     srv.daemon_threads = True
-    print(f"makemcp '{app.name}' serving HTTP on http://{host}:{port}{path}  (POST JSON-RPC, GET SSE)")
+    from ..banner import FULL_BANNER
+    print(FULL_BANNER)
+    print(f"Serving '{app.name}' over HTTP on http://{host}:{port}{path}  (POST JSON-RPC, GET SSE)")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

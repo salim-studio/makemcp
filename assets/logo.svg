@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="makemcp logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4F46E5"/>
+      <stop offset="1" stop-color="#06B6D4"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <path d="M58 188 V84 l34 52 36 -68 36 68 34 -52 v104 h-32 v-64 l-38 62 -38 -62 v64 z" fill="#FFFFFF"/>
+  <path d="M176 150 l-24 40 h14 l-6 22 26 -42 h-14 z" fill="#FBBF24"/>
+</svg>

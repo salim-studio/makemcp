@@ -87,7 +87,7 @@ class MakeMCPClient:
             return resp.get("result") if isinstance(resp, dict) else resp
         raise RuntimeError("not connected: call connect_direct/http/stdio first")
 
-    # ----- high-level API (mirrors fastmcp client) -----
+    # ----- high-level API -----
     async def ping(self):
         return await self._rpc("ping", {})
 
