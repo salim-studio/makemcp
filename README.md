@@ -131,13 +131,62 @@ makemcp inspect server.py
 makemcp version
 ```
 
+## Convert any app into MCP
+
+Already have an application? Turn it into an MCP server without rewriting it:
+
+```bash
+# Python file / module / function -> MCP tools
+makemcp convert app.py --name my-mcp -o server_mcp.py --run
+
+# REST API described by OpenAPI -> one tool per endpoint
+makemcp convert https://api.example.com/openapi.json --base-url https://api.example.com
+
+# Mixed sources via a JSON config file
+makemcp convert config.json --kind config -o server_mcp.py
+```
+
+`config.json` example:
+
+```json
+{
+  "name": "mixed",
+  "sources": [
+    {"kind": "python", "target": "app.py"},
+    {"kind": "openapi", "target": "https://api.example.com/openapi.json"},
+    {"kind": "command", "tools": [
+      {"name": "disk", "cmd": "df -h {path}", "description": "Show disk usage"}
+    ]}
+  ]
+}
+```
+
+Or use the browser interface — analyze sources, test-call tools, and download
+a runnable `server.py`, all visually:
+
+```bash
+makemcp ui --port 8080   # then open http://127.0.0.1:8080
+```
+
+The same converters are available in Python:
+
+```python
+from makemcp import python_to_app, openapi_to_app, commands_to_app, config_to_app
+
+app = python_to_app("app.py")                 # functions -> tools
+api = openapi_to_app("openapi.json")          # endpoints -> tools
+cli = commands_to_app([{"name": "disk", "cmd": "df -h"}])
+```
+
 ## Project layout
 
 ```
 makemcp/            core package (server, client, schema, transports, middleware, auth, cache, CLI)
+makemcp/convert.py  app-to-MCP bridge (python / openapi / command / config sources)
+makemcp/ui.py       browser-based converter interface
 assets/logo.svg     brand logo
-examples/           demo server
-tests/              smoke + performance tests
+examples/           demo server + sample convertible app
+tests/              smoke + performance + conversion tests
 ```
 
 ## License
