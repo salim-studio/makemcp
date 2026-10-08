@@ -4,19 +4,27 @@ Supported sources:
 - Python files / modules / single functions  -> one tool per public function
 - OpenAPI (URL, JSON file or dict)            -> one tool per API operation
 - Shell command templates                    -> one tool per command
+- GitHub repos (URL or owner/repo)            -> one tool per public function
 - JSON config files mixing any of the above
 
 Everything is stdlib-only. Converted apps are regular ``MakeMCP`` instances,
 so middleware, auth, caching and all transports keep working.
+
+Only convert code you trust: Python sources are imported (executed) locally.
 """
 from __future__ import annotations
 
 import inspect
 import json
 import keyword
+import os
 import re
 import shlex
+import shutil
 import string
+import sys
+import tarfile
+import tempfile
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -394,8 +402,222 @@ def config_to_app(config: dict):
     return combined
 
 
+# --------------------------------------------------------------------------
+# GitHub sources (no git required: tarball download + local cache)
+# --------------------------------------------------------------------------
+
+_GITHUB_URL = re.compile(r"""
+    ^(?:https?://github\.com/|github:)?
+    (?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+?)(?:\.git)?
+    (?:/(?:tree|blob)/(?P<ref>[^/]+?)(?P<subdir>/.*)?)?
+    /?$""", re.VERBOSE)
+
+
+def parse_github_target(target: str) -> dict:
+    """Parse ``https://github.com/owner/repo[/tree/ref[/subdir]]`` or
+    the ``owner/repo[@ref]`` shorthand into ``{owner, repo, ref, subdir}``."""
+    t = (target or "").strip()
+    ref = None
+    if "@" in t and not t.startswith("http"):
+        t, _, ref = t.partition("@")
+    m = _GITHUB_URL.match(t)
+    if not m:
+        raise ValueError(f"not a GitHub repo reference: {target!r} "
+                         "(use https://github.com/owner/repo or owner/repo)")
+    subdir = (m.group("subdir") or "").strip("/")
+    return {"owner": m.group("owner"), "repo": m.group("repo"),
+            "ref": ref or m.group("ref"), "subdir": subdir}
+
+
+def _cache_root() -> str:
+    candidates = [os.environ.get("MAKEMCP_CACHE"),
+                  os.path.join(os.path.expanduser("~"), ".cache", "makemcp"),
+                  os.path.join(tempfile.gettempdir(), "makemcp-cache")]
+    for cand in candidates:
+        if not cand:
+            continue
+        try:
+            os.makedirs(cand, exist_ok=True)
+            return cand
+        except OSError:
+            continue
+    raise OSError("no writable cache directory found")
+
+
+def github_default_branch(owner: str, repo: str, timeout: float = 15.0) -> str:
+    """Ask the GitHub API for a repo's default branch."""
+    url = f"https://api.github.com/repos/{owner}/{repo}"
+    req = urllib.request.Request(url, headers={"User-Agent": "makemcp",
+                                                "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        data = json.loads(r.read().decode("utf-8", "replace"))
+    branch = data.get("default_branch")
+    if not branch:
+        raise ValueError(f"cannot determine default branch of {owner}/{repo}")
+    return branch
+
+
+def download_tarball(url: str, dest: str, timeout: float = 120.0) -> str:
+    """Download a ``.tar.gz`` URL and extract it into *dest* (safe against
+    path traversal and symlinks). Returns *dest*."""
+    import io
+
+    req = urllib.request.Request(url, headers={"User-Agent": "makemcp"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        data = r.read()
+    tmp = dest + ".tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp)
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+            members = [m for m in tar.getmembers()
+                       if not (m.issym() or m.islnk())]
+            base = os.path.abspath(tmp)
+            for m in members:
+                p = os.path.abspath(os.path.join(tmp, m.name))
+                if p != base and not p.startswith(base + os.sep):
+                    raise ValueError(f"unsafe archive entry: {m.name}")
+            tar.extractall(tmp, members=members)
+        tops = [d for d in os.listdir(tmp)
+                if os.path.isdir(os.path.join(tmp, d))]
+        # Codeload tarballs contain a single top-level directory; use it.
+        src = os.path.join(tmp, tops[0]) if len(tops) == 1 else tmp
+        shutil.rmtree(dest, ignore_errors=True)
+        if src == tmp:
+            os.rename(tmp, dest)
+        else:
+            os.rename(src, dest)
+            shutil.rmtree(tmp, ignore_errors=True)
+    except Exception:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    return dest
+
+
+def fetch_github_repo(owner: str, repo: str, ref: str | None = None,
+                      refresh: bool = False, timeout: float = 120.0) -> str:
+    """Download (and cache) a GitHub repo tarball. Returns the local directory."""
+    refs = [ref] if ref else []
+    if not refs:
+        try:
+            refs.append(github_default_branch(owner, repo))
+        except Exception:
+            pass
+    refs += [r for r in ("main", "master") if r not in refs]
+    cache = os.path.join(_cache_root(), "github", f"{owner}_{repo}")
+    last_err: Exception | None = None
+    for r in refs:
+        dest = os.path.join(cache, r)
+        if os.path.isfile(os.path.join(dest, ".makemcp-ok")) and not refresh:
+            return dest
+        url = (f"https://codeload.github.com/{owner}/{repo}/tar.gz/"
+               f"{urllib.parse.quote(r)}")
+        try:
+            download_tarball(url, dest, timeout=timeout)
+            with open(os.path.join(dest, ".makemcp-ok"), "w",
+                      encoding="utf-8") as f:
+                f.write(url)
+            return dest
+        except Exception as e:
+            last_err = e
+            shutil.rmtree(dest, ignore_errors=True)
+    raise ValueError(f"cannot download github repo {owner}/{repo}: {last_err}")
+
+
+_SKIP_DIRS = {"__pycache__", ".git", ".hg", ".venv", "venv", "node_modules"}
+
+
+def _is_test_path(rel: str) -> bool:
+    parts = rel.replace("\\", "/").split("/")
+    if any(p in ("tests", "testing", "test") for p in parts[:-1]):
+        return True
+    base = parts[-1]
+    return base.startswith("test_") or base.endswith("_test.py") or base == "conftest.py"
+
+
+def app_from_tree(root: str, name: str, prefix: str = "",
+                  include_tests: bool = False, max_files: int = 100) -> Any:
+    """Build a ``MakeMCP`` app from an extracted source tree (one tool per
+    public function; tool names are prefixed with the module path)."""
+    from .server import MakeMCP
+    import importlib.util
+
+    app = MakeMCP(name)
+    taken: set[str] = set()
+    found: list[tuple[str, str]] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames
+                       if d not in _SKIP_DIRS and not d.startswith(".")]
+        for fn in sorted(filenames):
+            if not fn.endswith(".py"):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, fn), root)
+            if not include_tests and _is_test_path(rel):
+                continue
+            found.append((rel, os.path.join(dirpath, fn)))
+            if len(found) >= max_files:
+                break
+    count = 0
+    for rel, full in found:
+        modname = "_mkgh_" + re.sub(r"\W", "_", rel)
+        try:
+            spec = importlib.util.spec_from_file_location(modname, full)
+            if spec is None or spec.loader is None:
+                continue
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[modname] = mod
+            spec.loader.exec_module(mod)
+        except Exception:
+            continue  # skip files that fail to import
+        stem = os.path.splitext(rel)[0].replace(os.sep, "_")
+        stem = re.sub(r"\W", "_", stem)
+        if stem == "__init__":
+            stem = "pkg"
+        for fname, fn in iter_python_functions(mod):
+            tname = _ident(f"{prefix}{stem}_{fname}")
+            if tname in taken:
+                i = 2
+                while f"{tname}_{i}" in taken:
+                    i += 1
+                tname = f"{tname}_{i}"
+            taken.add(tname)
+            app.tool(fn, name=tname)
+            count += 1
+    if count == 0:
+        raise ValueError(f"no convertible Python functions under: {root}")
+    return app
+
+
+_GITHUB_OPTS = {"ref", "subdir", "name", "prefix", "include_tests",
+                "max_files", "refresh"}
+
+
+def github_to_app(target: str, ref: str | None = None,
+                  subdir: str | None = None, name: str | None = None,
+                  prefix: str = "", include_tests: bool = False,
+                  max_files: int = 100, refresh: bool = False) -> Any:
+    """Convert a GitHub repo (URL or ``owner/repo[@ref]``) into a ``MakeMCP``
+    app. The tarball is cached locally; pass ``refresh=True`` to re-fetch."""
+    info = parse_github_target(target)
+    dest = fetch_github_repo(info["owner"], info["repo"],
+                             ref=ref or info["ref"], refresh=refresh)
+    sub = (subdir or info["subdir"] or "").strip("/")
+    root = os.path.join(dest, sub) if sub else dest
+    if not os.path.isdir(root):
+        raise ValueError(f"subdirectory not found in repo: {sub!r}")
+    label = f"{info['owner']}/{info['repo']}" + (f"/{sub}" if sub else "")
+    return app_from_tree(root, name or f"gh:{label}", prefix=prefix,
+                         include_tests=include_tests, max_files=max_files)
+
+
 def detect_kind(target: str) -> str:
     t = (target or "").strip()
+    if not os.path.exists(t):
+        try:
+            parse_github_target(t)
+            return "github"
+        except ValueError:
+            pass
     if t.endswith(".json") or re.match(r"^https?://", t):
         return "openapi"
     if t.endswith(".py") or ":" in t or re.match(r"^[a-zA-Z_]\w*(\.\w+)+$", t):
@@ -415,8 +637,12 @@ def convert_target(target: str, kind: str = "auto", **opts):
         return commands_to_app(opts.get("tools", []),
                                name=opts.get("name", "commands"),
                                prefix=opts.get("prefix", ""))
+    if kind == "github":
+        return github_to_app(target,
+                             **{k: v for k, v in opts.items()
+                                if k in _GITHUB_OPTS})
     raise ValueError(f"cannot convert {target!r} (kind={kind}); "
-                     "use kind='python', 'openapi' or 'command'")
+                     "use kind='python', 'openapi', 'command' or 'github'")
 
 
 def analyze_target(target: str, kind: str = "auto", **opts) -> dict:

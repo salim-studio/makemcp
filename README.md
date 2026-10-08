@@ -142,6 +142,10 @@ makemcp convert app.py --name my-mcp -o server_mcp.py --run
 # REST API described by OpenAPI -> one tool per endpoint
 makemcp convert https://api.example.com/openapi.json --base-url https://api.example.com
 
+# GitHub repo -> one tool per public function (cached locally, no git needed)
+makemcp convert psf/requests --name req-mcp -o server_mcp.py
+makemcp convert https://github.com/pallets/click/tree/main/src --ref main
+
 # Mixed sources via a JSON config file
 makemcp convert config.json --kind config -o server_mcp.py
 ```
@@ -171,12 +175,18 @@ makemcp ui --port 8080   # then open http://127.0.0.1:8080
 The same converters are available in Python:
 
 ```python
-from makemcp import python_to_app, openapi_to_app, commands_to_app, config_to_app
+from makemcp import python_to_app, openapi_to_app, commands_to_app, github_to_app
 
 app = python_to_app("app.py")                 # functions -> tools
 api = openapi_to_app("openapi.json")          # endpoints -> tools
 cli = commands_to_app([{"name": "disk", "cmd": "df -h"}])
+hub = github_to_app("psf/requests", subdir="src")  # repo -> tools
 ```
+
+> GitHub repos are downloaded as tarballs (no `git` required) and cached under
+> `~/.cache/makemcp` (override with `MAKEMCP_CACHE`, `--refresh` re-downloads).
+> Test files are skipped by default (`--include-tests` to keep them).
+> Only convert repositories you trust — Python sources are imported locally.
 
 ## Project layout
 

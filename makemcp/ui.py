@@ -43,12 +43,13 @@ overflow:auto;max-height:340px;font-size:13px;white-space:pre-wrap}
 .foot{color:#64748b;font-size:12px;margin:20px 0;text-align:center}
 </style></head><body><div class="wrap">
 <h1><span class="bolt">⚡</span> makemcp converter</h1>
-<div class="sub">Turn a Python app, a REST API (OpenAPI) or shell commands into an MCP server.</div>
+<div class="sub">Turn a Python app, a REST API (OpenAPI), shell commands or a GitHub repo into an MCP server.</div>
 
 <div class="card"><div class="tabs">
 <button id="t-py" class="on" onclick="tab('py')">Python app</button>
 <button id="t-api" onclick="tab('api')">REST / OpenAPI</button>
 <button id="t-cmd" onclick="tab('cmd')">Commands</button>
+<button id="t-gh" onclick="tab('gh')">GitHub</button>
 </div>
 
 <div id="p-py">
@@ -66,6 +67,13 @@ overflow:auto;max-height:340px;font-size:13px;white-space:pre-wrap}
 <div id="p-cmd" style="display:none">
 <label>Commands as JSON: [{"name": "...", "cmd": "echo hello {who}", "description": "..."}]</label>
 <textarea id="cmd-tools">[{"name": "greet", "cmd": "echo hello {who}", "description": "Greet someone"}]</textarea>
+</div>
+
+<div id="p-gh" style="display:none">
+<label>GitHub repo URL or shorthand (only convert repos you trust)</label>
+<input id="gh-target" value="psf/requests"/>
+<label>Branch / tag (optional, blank = default branch)</label><input id="gh-ref" value=""/>
+<label>Subdirectory (optional)</label><input id="gh-subdir" value=""/>
 </div>
 
 <label>Server name</label><input id="srv-name" value="my-mcp"/>
@@ -86,7 +94,7 @@ overflow:auto;max-height:340px;font-size:13px;white-space:pre-wrap}
 <div class="foot">Copyright (c) 2026 salim-slimani · MIT</div>
 </div><script>
 let KIND='py', LASTCFG=null;
-function tab(k){KIND=k;for(const x of['py','api','cmd']){
+function tab(k){KIND=k;for(const x of['py','api','cmd','gh']){
 document.getElementById('t-'+x).className=x===k?'on':'';
 document.getElementById('p-'+x).style.display=x===k?'block':'none';}}
 function cfg(){const name=document.getElementById('srv-name').value||'my-mcp';
@@ -95,6 +103,10 @@ target:document.getElementById('py-target').value,
 prefix:document.getElementById('py-prefix').value}]};
 if(KIND==='api'){const s={kind:'openapi',target:document.getElementById('api-target').value};
 const b=document.getElementById('api-base').value;if(b)s.base_url=b;return{name,sources:[s]};}
+if(KIND==='gh'){const s={kind:'github',target:document.getElementById('gh-target').value};
+const r=document.getElementById('gh-ref').value;if(r)s.ref=r;
+const d=document.getElementById('gh-subdir').value;if(d)s.subdir=d;
+return{name,sources:[s]};}
 return{name,sources:[{kind:'command',tools:JSON.parse(document.getElementById('cmd-tools').value)}]};}
 async function post(p,b){const r=await fetch(p,{method:'POST',
 headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});return r.json();}

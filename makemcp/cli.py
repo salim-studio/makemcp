@@ -52,13 +52,22 @@ def main(argv=None):
     v = sub.add_parser("version", help="print version")
 
     c = sub.add_parser("convert", help="convert an app into an MCP server")
-    c.add_argument("target", help="app.py[:func], module, OpenAPI URL/JSON file, or config.json")
+    c.add_argument("target", help="app.py[:func], module, OpenAPI URL/JSON file, "
+                   "GitHub repo URL (or owner/repo), or config.json")
     c.add_argument("--kind", default="auto",
-                   choices=["auto", "python", "openapi", "config"],
+                   choices=["auto", "python", "openapi", "github", "config"],
                    help="source kind (auto-detected by default)")
     c.add_argument("--name", default=None, help="MCP server name")
     c.add_argument("--prefix", default="", help="prefix for converted tool names")
     c.add_argument("--base-url", default=None, help="OpenAPI base URL override")
+    c.add_argument("--ref", default=None,
+                   help="GitHub branch/tag/commit (default: repo default branch)")
+    c.add_argument("--subdir", default=None,
+                   help="GitHub subdirectory to convert (default: repo root)")
+    c.add_argument("--refresh", action="store_true",
+                   help="re-download GitHub repo instead of using the cache")
+    c.add_argument("--include-tests", action="store_true",
+                   help="also convert test files from GitHub repos")
     c.add_argument("-o", "--output", default=None,
                    help="write a standalone server.py to this path")
     c.add_argument("--run", action="store_true", help="run the converted server")
@@ -106,6 +115,15 @@ def main(argv=None):
             kw["prefix"] = a.prefix
         if a.base_url and a.kind in ("auto", "openapi"):
             kw["base_url"] = a.base_url
+        if a.kind in ("auto", "github"):
+            if a.ref:
+                kw["ref"] = a.ref
+            if a.subdir:
+                kw["subdir"] = a.subdir
+            if a.refresh:
+                kw["refresh"] = True
+            if a.include_tests:
+                kw["include_tests"] = True
         if a.kind == "config":
             with open(a.target, encoding="utf-8") as f:
                 cfg = _json.load(f)
