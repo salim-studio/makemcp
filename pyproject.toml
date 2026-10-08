@@ -1,0 +1,25 @@
+[project]
+name = "makemcp"
+version = "1.0.0"
+description = "MakeMCP — fast, stdlib-only, practical MCP framework (tools/resources/prompts + stdio/HTTP/SSE + client + CLI)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "makemcp" }]
+keywords = ["mcp", "llm", "tools", "model-context-protocol", "fastmcp-alternative"]
+dependencies = []
+
+[project.optional-dependencies]
+speed = ["orjson>=3.9", "uvloop>=0.19"]
+http = []
+dev = ["pytest>=7"]
+
+[project.scripts]
+makemcp = "makemcp.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["makemcp*"]
