@@ -86,9 +86,17 @@ async def main():
     print("plain /api/* routes OK")
 
     # one-click working example is embedded in the UI page
-    from makemcp.ui import PAGE
+    from makemcp.ui import PAGE, page_html
     assert "Try working example" in PAGE and "salim-studio/makemcp" in PAGE
+    stamped = page_html()
+    assert "__MAKEMCP_VERSION__" not in stamped and "MIT · v" in stamped
     print("embedded example OK")
+
+    # debug endpoint echoes the real request scope (for platform diagnosis)
+    s, d = await _call("GET", "/api/debug")
+    dbg = json.loads(d)
+    assert dbg["path"] == "/api/debug" and "makemcp" in dbg, dbg
+    print("debug endpoint OK:", dbg["path"], dbg["makemcp"])
 
 asyncio.run(main())
 print("ALL VERCEL TESTS PASSED")

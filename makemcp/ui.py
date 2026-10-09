@@ -92,7 +92,7 @@ overflow:auto;max-height:340px;font-size:13px;white-space:pre-wrap}
 <pre id="out-test"></pre></div></div>
 
 <div class="card"><h3>Generated server.py</h3><pre id="out-code">Press Generate…</pre></div>
-<div class="foot">Copyright (c) 2026 salim-slimani · MIT</div>
+<div class="foot">Copyright (c) 2026 salim-slimani · MIT · __MAKEMCP_VERSION__</div>
 </div><script>
 let KIND='py', LASTCFG=null;
 function tab(k){KIND=k;for(const x of['py','api','cmd','gh']){
@@ -149,6 +149,15 @@ def _config_from(payload: dict) -> dict:
     if not isinstance(cfg, dict) or not cfg.get("sources"):
         raise ValueError("empty configuration: describe a source first")
     return cfg
+
+
+def page_html() -> str:
+    """Converter UI page with the running version stamped in the footer."""
+    try:
+        from . import __version__
+    except Exception:
+        __version__ = "dev"
+    return PAGE.replace("__MAKEMCP_VERSION__", f"v{__version__}")
 
 
 def api_analyze(config: dict) -> dict:
@@ -209,7 +218,7 @@ def serve_ui(host: str = "127.0.0.1", port: int = 8080):
 
         def do_GET(self):
             if urlparse(self.path).path in ("/", "/index.html"):
-                return self._send(PAGE.encode(), "text/html; charset=utf-8")
+                return self._send(page_html().encode(), "text/html; charset=utf-8")
             self.send_response(404)
             self.end_headers()
 

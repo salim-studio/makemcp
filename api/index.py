@@ -3,6 +3,7 @@
 Routes:
     GET  /            -> converter web UI
     GET  /health      -> {"ok": true}
+    GET  /api/debug   -> request-scope diagnostics (method/path/headers)
     POST /api/analyze /api/test /api/generate -> converter backend
     POST /mcp         -> JSON-RPC 2.0 to the bundled demo MCP server
     GET  /mcp         -> server info + tool list (discovery)
@@ -13,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from makemcp.ui import PAGE, api_analyze, api_generate, api_test  # noqa: E402
+from makemcp.ui import api_analyze, api_generate, api_test, page_html  # noqa: E402
 
 _DEMO = None
 
@@ -73,9 +74,28 @@ async def app(scope, receive, send):
 
     try:
         if method == "GET" and path in ("/", "/index.html"):
-            return await respond(200, PAGE.encode(), "text/html; charset=utf-8")
+            return await respond(200, page_html().encode(),
+                                 "text/html; charset=utf-8")
         if method == "GET" and path == "/health":
             return await ok({"ok": True})
+        if method == "GET" and path == "/api/debug":
+            headers = {k.decode(errors="replace"): v.decode(errors="replace")
+                       for k, v in scope.get("headers", [])}
+            try:
+                from makemcp import __version__ as _v
+            except Exception:
+                _v = "dev"
+            return await ok({
+                "makemcp": _v,
+                "method": method,
+                "path": scope.get("path"),
+                "root_path": scope.get("root_path"),
+                "query": (scope.get("query_string") or b"").decode(),
+                "headers": {k: v for k, v in headers.items()
+                            if k.lower().startswith(
+                                ("x-vercel", "x-matched", "x-forwarded",
+                                 "forwarded", "host"))},
+            })
         if method == "GET" and path == "/mcp":
             demo = _demo_app()
             return await ok({"name": demo.name, "version": demo.version,
