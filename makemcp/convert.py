@@ -5,6 +5,8 @@ Supported sources:
 - OpenAPI (URL, JSON file or dict)            -> one tool per API operation
 - Shell command templates                    -> one tool per command
 - GitHub repos (URL or owner/repo)            -> one tool per public function
+  (missing third-party packages are stubbed so extraction still works;
+  required packages are reported per tool and overall)
 - JSON config files mixing any of the above
 
 Everything is stdlib-only. Converted apps are regular ``MakeMCP`` instances,
@@ -15,6 +17,7 @@ Only convert code you trust: Python sources are imported (executed) locally.
 from __future__ import annotations
 
 import inspect
+import contextlib
 import json
 import keyword
 import os
@@ -25,6 +28,7 @@ import string
 import sys
 import tarfile
 import tempfile
+import types
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -113,6 +117,8 @@ def iter_python_functions(obj, include_imported: bool = False,
             continue
         if inspect.isclass(fn):
             continue
+        if isinstance(fn, _StubObject):
+            continue  # stubbed dependency attribute, not a real tool
         try:
             inspect.signature(fn)
         except (TypeError, ValueError):
@@ -397,8 +403,16 @@ def config_to_app(config: dict):
         opts = {k: v for k, v in src.items() if k not in ("kind", "target", "prefix")}
         sub = convert_target(src.get("target", ""), kind=kind, **opts)
         combined.mount(sub, prefix=src.get("prefix", ""))
+        try:
+            reqs = sub._state.get("requirements")
+        except Exception:
+            reqs = None
+        if reqs:
+            combined._state.setdefault("requirements", set()).update(reqs)
     # keep the requested display name
     combined.name = config.get("name", "converted")
+    if isinstance(combined._state.get("requirements"), set):
+        combined._state["requirements"] = sorted(combined._state["requirements"])
     return combined
 
 
@@ -526,6 +540,37 @@ def fetch_github_repo(owner: str, repo: str, ref: str | None = None,
 
 _SKIP_DIRS = {"__pycache__", ".git", ".hg", ".venv", "venv", "node_modules"}
 
+_EXT_LANGS = {".js": "JavaScript", ".jsx": "JavaScript", ".mjs": "JavaScript",
+               ".ts": "TypeScript", ".tsx": "TypeScript", ".html": "HTML",
+               ".css": "CSS", ".java": "Java", ".go": "Go", ".rb": "Ruby",
+               ".php": "PHP", ".c": "C", ".cpp": "C++", ".cs": "C#",
+               ".swift": "Swift", ".kt": "Kotlin", ".rs": "Rust",
+               ".md": "Markdown", ".json": "JSON", ".yml": "YAML",
+               ".yaml": "YAML", ".toml": "TOML", ".sh": "Shell"}
+
+
+def _tree_file_stats(root: str, limit: int = 5000) -> tuple[int, list[tuple[str, int]]]:
+    """Count (python_files, [(language, count)]) under *root*."""
+    from collections import Counter
+
+    langs: Counter = Counter()
+    py = total = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames
+                       if d not in _SKIP_DIRS and not d.startswith(".")]
+        for fn in filenames:
+            total += 1
+            if total > limit:
+                break
+            ext = os.path.splitext(fn)[1].lower()
+            if ext == ".py":
+                py += 1
+            elif ext in _EXT_LANGS:
+                langs[_EXT_LANGS[ext]] += 1
+        if total > limit:
+            break
+    return py, langs.most_common(6)
+
 
 def _is_test_path(rel: str) -> bool:
     parts = rel.replace("\\", "/").split("/")
@@ -535,12 +580,159 @@ def _is_test_path(rel: str) -> bool:
     return base.startswith("test_") or base.endswith("_test.py") or base == "conftest.py"
 
 
+class _StubModule(types.ModuleType):
+    """Fake module standing in for a missing third-party dependency.
+
+    Any attribute access returns another stub, so imports, decorators,
+    base classes (via ``__mro_entries__``) and annotations survive.
+    """
+
+    def __getattr__(self, name: str):
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        child = _StubObject(f"{self.__name__}.{name}")
+        self.__dict__[name] = child
+        return child
+
+
+class _StubObject:
+    """Callable stand-in for any missing attribute."""
+
+    def __init__(self, name: str):
+        self.__dict__["_stub_name"] = name
+
+    def __call__(self, *args, **kwargs):
+        if len(args) == 1 and not kwargs and callable(args[0]):
+            # e.g. @stubbed_decorator(): the real decorator is unavailable,
+            # so preserve the function itself for extraction.
+            return args[0]
+        return _StubObject(self.__dict__["_stub_name"] + "()")
+
+    def __getattr__(self, name: str):
+        if name == "__mro_entries__":
+            return lambda bases: (object,)
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return _StubObject(f"{self.__dict__['_stub_name']}.{name}")
+
+    def __repr__(self):  # pragma: no cover
+        return f"<stub {self.__dict__['_stub_name']}>"
+
+
+def _missing_name(err: ImportError) -> str | None:
+    name = getattr(err, "name", None)
+    if name:
+        return name
+    m = re.search(r"No module named '([\w.]+)'", str(err))
+    return m.group(1) if m else None
+
+
+def _importable(name: str) -> bool:
+    import importlib.util
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:
+        return False
+
+
+def _ensure_stub(dotted: str) -> str:
+    """Register stub modules for a missing dotted path. Returns top-level name."""
+    parts = dotted.split(".")
+    for i in range(1, len(parts) + 1):
+        sub = ".".join(parts[:i])
+        if sub not in sys.modules:
+            sys.modules[sub] = _StubModule(sub)
+    if len(parts) > 1:
+        parent, leaf = ".".join(parts[:-1]), parts[-1]
+        try:
+            setattr(sys.modules[parent], leaf, sys.modules[dotted])
+        except Exception:
+            pass
+    return parts[0]
+
+
+@contextlib.contextmanager
+def _temp_sys_path(extra):
+    """Temporarily APPEND directories (never prepend: repo files must not
+    shadow the standard library or installed packages)."""
+    saved = sys.path[:]
+    sys.path.extend(p for p in extra if p not in sys.path)
+    try:
+        yield
+    finally:
+        sys.path[:] = saved
+
+
+def _import_with_stubs(modname: str, full: str, root: str,
+                       max_stubs: int = 25):
+    """Import a file, stubbing missing third-party modules on demand.
+
+    Local imports resolve because the file's directory and the tree root
+    are temporarily on ``sys.path``. Returns ``(module, stubbed)`` where
+    *stubbed* is the set of stubbed top-level package names.
+    """
+    import importlib.util
+
+    stubbed: set[str] = set()
+    filedir = os.path.dirname(full)
+    tries = 0
+    while True:
+        try:
+            with _temp_sys_path([filedir, root]):
+                spec = importlib.util.spec_from_file_location(modname, full)
+                if spec is None or spec.loader is None:
+                    raise ImportError(f"cannot load {full}")
+                mod = importlib.util.module_from_spec(spec)
+                sys.modules[modname] = mod
+                spec.loader.exec_module(mod)
+            return mod, stubbed
+        except ImportError as err:
+            missing = _missing_name(err)
+            if (not missing or tries >= max_stubs
+                    or _importable(missing.split(".")[0])):
+                raise
+            stubbed.add(_ensure_stub(missing))
+            tries += 1
+
+
+_LAST_TREE_KEYS: set[str] = set()
+
+
+def _tree_owned_keys(root: str, keys) -> set[str]:
+    """Modules this tree build introduced (its own files + stubs), so the
+    next conversion starts fresh instead of reusing stale modules."""
+    out: set[str] = set()
+    base = os.path.abspath(root) + os.sep
+    for k in keys:
+        if k.startswith(("_mkgh_", "_mkconv_")):
+            out.add(k)
+            continue
+        m = sys.modules.get(k)
+        if isinstance(m, _StubModule):
+            out.add(k)
+        else:
+            f = getattr(m, "__file__", None)
+            if f and os.path.abspath(f).startswith(base):
+                out.add(k)
+    return out
+
+
 def app_from_tree(root: str, name: str, prefix: str = "",
                   include_tests: bool = False, max_files: int = 100) -> Any:
     """Build a ``MakeMCP`` app from an extracted source tree (one tool per
-    public function; tool names are prefixed with the module path)."""
+    public function; tool names are prefixed with the module path).
+
+    Files that need uninstalled third-party packages are imported with
+    those packages stubbed; each affected tool records its requirements
+    in ``fn.__makemcp_requires__`` and the app in ``app._state``.
+    """
     from .server import MakeMCP
-    import importlib.util
+    global _LAST_TREE_KEYS
+
+    for k in _LAST_TREE_KEYS:
+        sys.modules.pop(k, None)
+    _LAST_TREE_KEYS = set()
+    before = set(sys.modules)
 
     app = MakeMCP(name)
     taken: set[str] = set()
@@ -558,21 +750,19 @@ def app_from_tree(root: str, name: str, prefix: str = "",
             if len(found) >= max_files:
                 break
     count = 0
+    requirements: set[str] = set()
     for rel, full in found:
         modname = "_mkgh_" + re.sub(r"\W", "_", rel)
         try:
-            spec = importlib.util.spec_from_file_location(modname, full)
-            if spec is None or spec.loader is None:
-                continue
-            mod = importlib.util.module_from_spec(spec)
-            sys.modules[modname] = mod
-            spec.loader.exec_module(mod)
-        except Exception:
+            mod, stubbed = _import_with_stubs(modname, full, root)
+        except (Exception, SystemExit):
             continue  # skip files that fail to import
         stem = os.path.splitext(rel)[0].replace(os.sep, "_")
         stem = re.sub(r"\W", "_", stem)
         if stem == "__init__":
             stem = "pkg"
+        needs = sorted(stubbed)
+        requirements.update(needs)
         for fname, fn in iter_python_functions(mod):
             tname = _ident(f"{prefix}{stem}_{fname}")
             if tname in taken:
@@ -581,10 +771,18 @@ def app_from_tree(root: str, name: str, prefix: str = "",
                     i += 1
                 tname = f"{tname}_{i}"
             taken.add(tname)
+            if needs:
+                try:
+                    fn.__makemcp_requires__ = needs
+                except Exception:
+                    pass
             app.tool(fn, name=tname)
             count += 1
+    _LAST_TREE_KEYS = _tree_owned_keys(root, set(sys.modules) - before)
     if count == 0:
         raise ValueError(f"no convertible Python functions under: {root}")
+    if requirements:
+        app._state["requirements"] = sorted(requirements)
     return app
 
 
@@ -606,8 +804,18 @@ def github_to_app(target: str, ref: str | None = None,
     if not os.path.isdir(root):
         raise ValueError(f"subdirectory not found in repo: {sub!r}")
     label = f"{info['owner']}/{info['repo']}" + (f"/{sub}" if sub else "")
-    return app_from_tree(root, name or f"gh:{label}", prefix=prefix,
-                         include_tests=include_tests, max_files=max_files)
+    try:
+        return app_from_tree(root, name or f"gh:{label}", prefix=prefix,
+                             include_tests=include_tests, max_files=max_files)
+    except ValueError:
+        py, langs = _tree_file_stats(root)
+        if py == 0:
+            found = ", ".join(f"{n} {lang}" for lang, n in langs) or "no files"
+            raise ValueError(
+                f"{label} contains no Python files (found: {found}). "
+                "makemcp converts Python apps, REST APIs (OpenAPI) and "
+                "shell commands.") from None
+        raise
 
 
 def detect_kind(target: str) -> str:
@@ -645,29 +853,45 @@ def convert_target(target: str, kind: str = "auto", **opts):
                      "use kind='python', 'openapi', 'command' or 'github'")
 
 
+def summarize_app(app, name: str | None = None) -> dict:
+    """JSON-serializable summary of an app (for UIs and codegen)."""
+    try:
+        requirements = list(app._state.get("requirements", ()))
+    except Exception:
+        requirements = []
+    return {
+        "name": name or app.name,
+        "tool_count": len(app._tools),
+        "requirements": requirements,
+        "tools": [{"name": t.name, "description": t.description,
+                   "inputSchema": t.schema,
+                   "requires": list(getattr(t.fn, "__makemcp_requires__", None) or [])}
+                  for t in app._tools.values()],
+    }
+
+
 def analyze_target(target: str, kind: str = "auto", **opts) -> dict:
     """Convert and return a JSON-serializable summary (for UIs)."""
     app = convert_target(target, kind=kind, **opts) if kind != "config" \
         else config_to_app(json.loads(open(target, encoding="utf-8").read())
                            if isinstance(target, str) else target)
-    return {
-        "name": app.name,
-        "tool_count": len(app._tools),
-        "tools": [{"name": t.name, "description": t.description,
-                   "inputSchema": t.schema} for t in app._tools.values()],
-    }
+    return summarize_app(app)
 
 
-def render_server_module(config: dict) -> str:
+def render_server_module(config: dict, requirements=None) -> str:
     """Render a standalone ``server.py`` that rebuilds the converted app."""
     payload = json.dumps(config, indent=2, ensure_ascii=False)
+    req_block = ""
+    if requirements:
+        req_block = ("# Required third-party packages (used by the converted app):\n"
+                     "#     pip install " + " ".join(requirements) + "\n\n")
     return f'''"""MCP server generated by makemcp convert.
 
 Run with:
     python server.py           # stdio transport
     python server.py http 8000  # HTTP transport on port 8000
 """
-from makemcp.convert import config_to_app
+{req_block}from makemcp.convert import config_to_app
 
 CONFIG = {payload}
 

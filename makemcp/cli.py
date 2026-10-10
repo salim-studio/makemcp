@@ -105,7 +105,7 @@ def main(argv=None):
         serve_ui(host=a.host, port=a.port)
         return
     if a.cmd == "convert":
-        from .convert import analyze_target, config_to_app, convert_target
+        from .convert import config_to_app, convert_target, summarize_app
         import json as _json
         import os as _os
         kw: dict = {}
@@ -124,20 +124,31 @@ def main(argv=None):
                 kw["refresh"] = True
             if a.include_tests:
                 kw["include_tests"] = True
-        if a.kind == "config":
-            with open(a.target, encoding="utf-8") as f:
-                cfg = _json.load(f)
-            if a.name:
-                cfg["name"] = a.name
-            app = config_to_app(cfg)
-            summary = {"name": app.name, "tool_count": len(app._tools),
-                       "tools": sorted(app._tools)}
-        else:
-            app = convert_target(a.target, kind=a.kind, **kw)
-            summary = analyze_target(a.target, kind=a.kind, **kw)
+        try:
+            if a.kind == "config":
+                with open(a.target, encoding="utf-8") as f:
+                    cfg = _json.load(f)
+                if a.name:
+                    cfg["name"] = a.name
+                app = config_to_app(cfg)
+            else:
+                app = convert_target(a.target, kind=a.kind, **kw)
+            summary = summarize_app(app)
+        except ValueError as e:
+            print(f"Error: {e}")
+            raise SystemExit(1)
         print(f"Converted '{summary['name']}': {summary['tool_count']} tool(s)")
         for t in summary["tools"]:
-            print(f"  [tool] {t['name'] if isinstance(t, dict) else t}")
+            extra = ""
+            try:
+                reqs = t.get("requires") or []
+            except Exception:
+                reqs = []
+            if reqs:
+                extra = f" [needs: {', '.join(reqs)}]"
+            print(f"  [tool] {t['name']}{extra}")
+        if summary.get("requirements"):
+            print(f"Install: pip install {' '.join(summary['requirements'])}")
         if a.output:
             if a.kind == "config":
                 with open(a.target, encoding="utf-8") as f:
@@ -147,8 +158,12 @@ def main(argv=None):
                        "target": a.target, **kw}
                 cfg = {"name": summary["name"], "sources": [src]}
             from .convert import render_server_module
+            try:
+                reqs = sorted(app._state.get("requirements", ())) or None
+            except Exception:
+                reqs = None
             with open(a.output, "w", encoding="utf-8") as f:
-                f.write(render_server_module(cfg))
+                f.write(render_server_module(cfg, requirements=reqs))
             print(f"Wrote {_os.path.abspath(a.output)}")
         if a.run:
             app.run(transport=a.transport, port=a.port)

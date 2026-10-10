@@ -1,11 +1,13 @@
 """Tests for the GitHub source (hermetic: a local HTTP server stands in for
 codeload.github.com, so no network access is needed). Stdlib only."""
 import asyncio
+import io
 import os
 import sys
 import tarfile
 import tempfile
 import threading
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, ".")
@@ -17,6 +19,8 @@ from makemcp.convert import (
     download_tarball,
     parse_github_target,
 )
+from makemcp.server import _result_to_content
+from makemcp import _json as _J
 
 # 1) URL parsing -------------------------------------------------------------
 assert parse_github_target("https://github.com/psf/requests") == \
@@ -104,8 +108,6 @@ srv.shutdown()
 print("3) download + extract + convert OK:", names)
 
 # 4) Traversal attack blocked -------------------------------------------------
-import io
-import urllib.request
 
 evil = os.path.join(work, "evil.tar.gz")
 with tarfile.open(evil, "w:gz") as tar:
@@ -123,5 +125,87 @@ else:
 assert not os.path.exists(os.path.join(work, "evil.py"))
 assert not os.path.exists(os.path.join(os.path.dirname(work), "evil.py"))
 print("4) traversal blocked OK")
+
+# 5) Missing third-party deps are stubbed; local imports resolve ------------
+import importlib.util as _ilu
+expected_reqs = sorted(m for m in ("numpy", "scipy", "torch")
+                       if _ilu.find_spec(m) is None)
+assert len(expected_reqs) >= 2, expected_reqs  # torch/scipy must be missing
+dep = os.path.join(work, "deplib")
+os.makedirs(dep)
+
+
+def _w2(path, text):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+_w2(os.path.join(dep, "utils.py"), "def helper(x):\n    return x * 2\n")
+_w2(os.path.join(dep, "main.py"),
+     "import torch\nimport numpy as np\nfrom scipy import stats\nimport utils\n\n"
+     "@torch.no_grad()\n"
+     "def predict(x: int) -> int:\n    \"\"\"Predict.\"\"\"\n"
+     "    return utils.helper(x)\n\n"
+     "class Net(torch.nn.Module):\n    pass\n")
+dep_app = app_from_tree(dep, "dep")
+assert sorted(dep_app._tools) == ["main_predict", "utils_helper"], \
+    sorted(dep_app._tools)
+assert asyncio.run(dep_app.call_tool("main_predict", {"x": 21})) == 42
+assert dep_app._state.get("requirements") == expected_reqs, dep_app._state
+fn = dep_app._tools["main_predict"].fn
+assert getattr(fn, "__makemcp_requires__", []) == expected_reqs
+print("5) stubbed deps + local imports OK")
+
+# 6) Requirements flow into summaries, configs and generated code ------------
+from makemcp.convert import summarize_app, config_to_app, render_server_module
+
+s = summarize_app(dep_app)
+assert s["requirements"] == expected_reqs, s
+assert s["tools"][0]["requires"] == expected_reqs, s
+code = render_server_module({"name": "d", "sources": []},
+                            requirements=s["requirements"])
+assert ("pip install " + " ".join(expected_reqs)) in code, code
+
+import makemcp.convert as _C
+_orig_fetch = _C.fetch_github_repo
+_C.fetch_github_repo = lambda *a, **k: dep
+try:
+    mixed = config_to_app({"name": "m", "sources": [{"kind": "github",
+                                                     "target": "o/r"}]})
+finally:
+    _C.fetch_github_repo = _orig_fetch
+assert mixed._state.get("requirements") == expected_reqs, mixed._state
+print("6) requirements plumbing OK")
+
+# 7) Exotic return values stay JSON-serializable (stdio never crashes) -------
+
+
+class _Weird:
+    def to_dict(self):
+        return {"type": "text", "text": object()}  # not serializable
+
+
+for weird in (_Weird(), object(), {"a": object()}, [object()]):
+    content = _result_to_content(weird)
+    _J.dumps({"jsonrpc": "2.0", "id": 1, "result": {"content": content}})
+print("7) serialization hardening OK")
+
+# 8) Non-Python repos get a helpful diagnosis, not a bare failure ----------
+jsrepo = os.path.join(work, "jsrepo")
+os.makedirs(jsrepo)
+_w(os.path.join(jsrepo, "app.js"), "function go(){}\n")
+_w(os.path.join(jsrepo, "index.html"), "<html></html>\n")
+_C.fetch_github_repo = lambda *a, **k: jsrepo
+try:
+    from makemcp.convert import github_to_app
+    github_to_app("o/jsrepo")
+except ValueError as e:
+    msg = str(e)
+    assert "no Python files" in msg and "JavaScript" in msg, msg
+    print("8) diagnosis OK:", msg)
+else:
+    raise AssertionError("should have refused a JS-only repo")
+finally:
+    _C.fetch_github_repo = _orig_fetch
 
 print("ALL GITHUB TESTS PASSED")

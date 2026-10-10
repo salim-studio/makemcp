@@ -187,6 +187,12 @@ hub = github_to_app("psf/requests", subdir="src")  # repo -> tools
 > `~/.cache/makemcp` (override with `MAKEMCP_CACHE`, `--refresh` re-downloads).
 > Test files are skipped by default (`--include-tests` to keep them).
 > Only convert repositories you trust — Python sources are imported locally.
+>
+> Dependency-resilient extraction: files needing uninstalled third-party
+> packages are still converted (missing packages are stubbed at import time),
+> and every affected tool reports its requirements — shown in Analyze output
+> (`pip install ...`) and in the generated `server.py` header. Repos without
+> any Python code are refused with a message describing what was found.
 
 ## Project layout
 

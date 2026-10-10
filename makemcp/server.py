@@ -28,33 +28,59 @@ def _is_async(fn) -> bool:
     return inspect.iscoroutinefunction(fn)
 
 
+def _json_safe(obj: Any) -> Any:
+    """Recursively coerce *obj* into JSON-serializable data (str fallback).
+
+    Guarantees the transport layer can always serialize a response —
+    converted tools may return exotic objects (e.g. dependency stubs).
+    """
+    try:
+        J.dumps(obj)
+        return obj
+    except Exception:
+        pass
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return str(obj)
+
+
+def _coerce_item(r: Any) -> dict:
+    if isinstance(r, dict) and isinstance(r.get("type"), str):
+        return _json_safe(r)
+    if hasattr(r, "to_dict"):
+        try:
+            d = r.to_dict()
+            return _json_safe(d) if isinstance(d, dict) \
+                else {"type": "text", "text": str(d)}
+        except Exception:
+            pass
+    return {"type": "text", "text": r if isinstance(r, str) else str(r)}
+
+
 def _result_to_content(res: Any) -> list[dict]:
     if res is None:
         return [{"type": "text", "text": ""}]
     if isinstance(res, TextContent):
-        return [res.to_dict()]
+        return [_json_safe(res.to_dict())]
     if isinstance(res, dict) and res.get("type") in ("text", "image", "resource"):
-        return [res]
+        return [_json_safe(res)]
     if isinstance(res, (str, int, float, bool)):
         return [{"type": "text", "text": str(res)}]
     if isinstance(res, (list, tuple)):
-        out: list[dict] = []
-        for r in res:
-            if isinstance(r, dict) and r.get("type"):
-                out.append(r)
-            elif hasattr(r, "to_dict"):
-                out.append(r.to_dict())
-            else:
-                out.append({"type": "text", "text": str(r)})
+        out: list[dict] = [_coerce_item(r) for r in res]
         return out or [{"type": "text", "text": ""}]
     if hasattr(res, "to_dict"):
         try:
-            return [res.to_dict()]
+            d = res.to_dict()
+            return [_json_safe(d) if isinstance(d, dict)
+                    else {"type": "text", "text": str(d)}]
         except Exception:
             pass
     # structured: return as text JSON (fast dumps)
     try:
-        return [{"type": "text", "text": J.dumps(res).decode()}]
+        return [{"type": "text", "text": _json_safe(J.dumps(res).decode())}]
     except Exception:
         return [{"type": "text", "text": str(res)}]
 
@@ -324,12 +350,12 @@ class MakeMCP:
                 return self._ok(_id, {"resources": [r.to_dict() for r in self._resources.values()]})
             if method == "resources/read":
                 items = await self.read_resource(params.get("uri", ""), ctx)
-                return self._ok(_id, {"contents": items})
+                return self._ok(_id, {"contents": _json_safe(items)})
             if method == "prompts/list":
                 return self._ok(_id, {"prompts": [p.to_dict() for p in self._prompts.values()]})
             if method == "prompts/get":
                 msgs = await self.get_prompt(params.get("name", ""), params.get("arguments") or {}, ctx)
-                return self._ok(_id, {"messages": msgs})
+                return self._ok(_id, {"messages": _json_safe(msgs)})
             return self._err(_id, -32601, f"Method not found: {method}")
         except MakeMCPError as e:
             if is_notify or _id is None:

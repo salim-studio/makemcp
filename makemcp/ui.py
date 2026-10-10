@@ -125,8 +125,11 @@ async function analyze(){const c=cfg();LASTCFG=c;
 const r=await api('analyze',{config:c});
 const el=document.getElementById('out-tools');
 if(r.error){el.innerHTML='<span class=err>'+esc(r.error)+'</span>';return;}
-el.textContent=r.tools.map(t=>'[tool] '+t.name+' :: '+(t.description||'')).join('\\n')
-+'\\n\\n'+r.tool_count+' tool(s) in "'+r.name+'"';
+el.textContent=r.tools.map(t=>'[tool] '+t.name+
+(t.requires&&t.requires.length?' [needs: '+t.requires.join(', ')+']':'')+
+' :: '+(t.description||'')).join('\\n')
++'\\n\\n'+r.tool_count+' tool(s) in "'+r.name+'"'+
+(r.requirements&&r.requirements.length?'\\nInstall: pip install '+r.requirements.join(' '):'');
 if(r.tools.length){document.getElementById('testbox').style.display='block';
 document.getElementById('test-call').value=JSON.stringify({tool:r.tools[0].name,args:{}},null,1);}}
 async function testcall(){let t;try{t=JSON.parse(document.getElementById('test-call').value);}
@@ -163,7 +166,7 @@ def page_html() -> str:
 
 def api_analyze(config: dict) -> dict:
     """Shared handler: describe the tools a config would produce."""
-    from .convert import analyze_target, config_to_app
+    from .convert import analyze_target, config_to_app, summarize_app
 
     if len(config["sources"]) == 1 and config["sources"][0].get("kind") != "command":
         s = config["sources"][0]
@@ -173,12 +176,7 @@ def api_analyze(config: dict) -> dict:
                                 if k not in ("kind", "target")})
         out["name"] = config.get("name", out["name"])
         return out
-    app = config_to_app(config)
-    return {"name": config.get("name", app.name),
-            "tool_count": len(app._tools),
-            "tools": [{"name": t.name, "description": t.description,
-                       "inputSchema": t.schema}
-                      for t in app._tools.values()]}
+    return summarize_app(config_to_app(config), name=config.get("name"))
 
 
 async def api_test(config: dict, tool: str, args: dict):
@@ -191,9 +189,14 @@ async def api_test(config: dict, tool: str, args: dict):
 
 def api_generate(config: dict) -> dict:
     """Shared handler: render a standalone server.py for a config."""
-    from .convert import render_server_module
+    from .convert import render_server_module, config_to_app
 
-    return {"code": render_server_module(config)}
+    reqs = None
+    try:
+        reqs = config_to_app(config)._state.get("requirements") or None
+    except Exception:
+        reqs = None
+    return {"code": render_server_module(config, requirements=reqs)}
 
 
 def serve_ui(host: str = "127.0.0.1", port: int = 8080):
