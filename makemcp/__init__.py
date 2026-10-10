@@ -9,7 +9,7 @@ from .types import Tool, Resource, Prompt, TextContent, ImageContent, EmbeddedRe
 from .client import MakeMCPClient, Client
 from .exceptions import MakeMCPError, ToolError, ResourceError, PromptError, AuthError
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 __all__ = [
     "MakeMCP", "Tool", "Resource", "Prompt",
     "TextContent", "ImageContent", "EmbeddedResource",

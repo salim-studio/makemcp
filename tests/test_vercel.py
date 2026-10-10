@@ -16,7 +16,7 @@ entry = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(entry)
 
 
-async def _call(method, path, body=None, root_path=""):
+async def _call(method, path, body=None, root_path="", query=b""):
     msgs = []
     state = {"sent": False}
     body_b = json.dumps(body).encode() if body is not None else b""
@@ -31,7 +31,8 @@ async def _call(method, path, body=None, root_path=""):
         msgs.append(m)
 
     await entry.app({"type": "http", "method": method, "path": path,
-                     "root_path": root_path}, receive, send)
+                     "root_path": root_path, "query_string": query},
+                    receive, send)
     start = next(m for m in msgs if m["type"] == "http.response.start")
     data = b"".join(m.get("body", b"")
                     for m in msgs if m["type"] == "http.response.body")
@@ -97,6 +98,19 @@ async def main():
     dbg = json.loads(d)
     assert dbg["path"] == "/api/debug" and "makemcp" in dbg, dbg
     print("debug endpoint OK:", dbg["path"], dbg["makemcp"])
+
+    # platform replaces the URL path with the mount path: ?route= saves us
+    s, d = await _call("POST", "/api/index", cfg, query=b"route=api/analyze")
+    assert json.loads(d)["tool_count"] == 3, d[:160]
+    print("query-param routing OK")
+
+    # ... and a bare JSON-RPC POST to an unknown path still dispatches
+    rpc = {"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+           "params": {"name": "add", "arguments": {"a": 1, "b": 2}}}
+    for p in ("/", "/api/index"):
+        s, d = await _call("POST", p, rpc)
+        assert json.loads(d)["result"]["content"][0]["text"] == "3", (p, d[:160])
+    print("JSON-RPC fallback OK")
 
 asyncio.run(main())
 print("ALL VERCEL TESTS PASSED")

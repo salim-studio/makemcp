@@ -11,6 +11,7 @@ Routes:
 import json
 import os
 import sys
+import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -51,6 +52,11 @@ async def app(scope, receive, send):
     path = full
     if path == "/api/index" or path.startswith("/api/index/"):
         path = path[len("/api/index"):] or "/"
+    # ?route= survives proxy rewrites that replace the URL path with the
+    # function mount path. The UI always sends it alongside the real path.
+    qs = urllib.parse.parse_qs((scope.get("query_string") or b"").decode("latin-1"))
+    if qs.get("route"):
+        path = "/" + qs["route"][0].lstrip("/")
     path = path.rstrip("/") or "/"
 
     body = b""
@@ -123,6 +129,24 @@ async def app(scope, receive, send):
                 return await ok([o for o in out if o is not None])
             resp = await demo.handle(payload)
             return await ok(resp if resp is not None else {})
+        # Path-agnostic JSON-RPC fallback: some platforms replace the URL
+        # path with the function mount path, so a JSON-RPC payload POSTed to
+        # an unknown path is still dispatched to the demo MCP server instead
+        # of 404ing. Deliberate and documented.
+        if method == "POST":
+            try:
+                maybe = json.loads(body.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                maybe = None
+            if isinstance(maybe, dict) and "method" in maybe:
+                demo = _demo_app()
+                resp = await demo.handle(maybe)
+                return await ok(resp if resp is not None else {})
+            if isinstance(maybe, list) and maybe and all(
+                    isinstance(m, dict) and "method" in m for m in maybe):
+                demo = _demo_app()
+                out = [await demo.handle(m) for m in maybe]
+                return await ok([o for o in out if o is not None])
         return await respond(404, _json_body({"error": "not found"}),
                              "application/json")
     except Exception as e:

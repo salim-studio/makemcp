@@ -10,7 +10,7 @@ import asyncio
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 PAGE = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"/>
@@ -113,6 +113,7 @@ async function post(p,b){const r=await fetch(p,{method:'POST',
 headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
 let j;try{j=await r.json();}catch(e){return{error:'HTTP '+r.status+' at '+p};}
 if(!r.ok&&!j.error)j.error='HTTP '+r.status+' at '+p;return j;}
+function api(name,body){return post('/api/'+name+'?route=api/'+name,body);}
 async function example(){tab('gh');
 document.getElementById('gh-target').value='salim-studio/makemcp';
 document.getElementById('gh-ref').value='';
@@ -121,7 +122,7 @@ document.getElementById('srv-name').value='makemcp-self';
 document.getElementById('out-tools').textContent='Converting salim-studio/makemcp …';
 await analyze();}
 async function analyze(){const c=cfg();LASTCFG=c;
-const r=await post('/api/analyze',{config:c});
+const r=await api('analyze',{config:c});
 const el=document.getElementById('out-tools');
 if(r.error){el.innerHTML='<span class=err>'+esc(r.error)+'</span>';return;}
 el.textContent=r.tools.map(t=>'[tool] '+t.name+' :: '+(t.description||'')).join('\\n')
@@ -130,9 +131,9 @@ if(r.tools.length){document.getElementById('testbox').style.display='block';
 document.getElementById('test-call').value=JSON.stringify({tool:r.tools[0].name,args:{}},null,1);}}
 async function testcall(){let t;try{t=JSON.parse(document.getElementById('test-call').value);}
 catch(e){document.getElementById('out-test').textContent='Bad JSON: '+e;return;}
-const r=await post('/api/test',{config:LASTCFG,tool:t.tool,args:t.args||{}});
+const r=await api('test',{config:LASTCFG,tool:t.tool,args:t.args||{}});
 document.getElementById('out-test').textContent=JSON.stringify(r,null,1);}
-async function gen(){const r=await post('/api/generate',{config:cfg()});
+async function gen(){const r=await api('generate',{config:cfg()});
 const el=document.getElementById('out-code');
 if(r.error){el.innerHTML='<span class=err>'+esc(r.error)+'</span>';return;}
 el.textContent=r.code;window._code=r.code;}
@@ -223,7 +224,13 @@ def serve_ui(host: str = "127.0.0.1", port: int = 8080):
             self.end_headers()
 
         def do_POST(self):
-            path = urlparse(self.path).path
+            parts = urlparse(self.path)
+            path = parts.path
+            if parts.query:
+                # ?route= survives proxy rewrites that replace the URL path.
+                q = parse_qs(parts.query)
+                if q.get("route"):
+                    path = "/" + q["route"][0].lstrip("/")
             try:
                 ln = int(self.headers.get("Content-Length") or 0)
             except ValueError:
