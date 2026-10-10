@@ -93,6 +93,13 @@ async def main():
     assert "__MAKEMCP_VERSION__" not in stamped and "MIT · v" in stamped
     print("embedded example OK")
 
+    # ... but all input fields start empty (placeholders only, no presets)
+    for fid in ("py-target", "api-target", "gh-target", "gh-ref",
+                "gh-subdir", "srv-name"):
+        assert f'id="{fid}" value=""' in PAGE, fid
+    assert 'value="examples' not in PAGE and "petstore" not in PAGE
+    print("empty defaults OK")
+
     # debug endpoint echoes the real request scope (for platform diagnosis)
     s, d = await _call("GET", "/api/debug")
     dbg = json.loads(d)

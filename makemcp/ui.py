@@ -53,30 +53,30 @@ overflow:auto;max-height:340px;font-size:13px;white-space:pre-wrap}
 </div>
 
 <div id="p-py">
-<label>Python file, module or function (e.g. <code>app.py</code>, <code>app.py:main</code>, <code>mypkg.mod</code>)</label>
-<input id="py-target" value="examples/sample_app.py"/>
-<label>Tool name prefix (optional)</label><input id="py-prefix" value=""/>
+<label>Python file, module or function</label>
+<input id="py-target" value="" placeholder="app.py, app.py:main, or mypkg.mod"/>
+<label>Tool name prefix (optional)</label><input id="py-prefix" value="" placeholder="optional"/>
 </div>
 
 <div id="p-api" style="display:none">
 <label>OpenAPI URL or JSON file path</label>
-<input id="api-target" value="https://petstore3.swagger.io/api/v3/openapi.json"/>
-<label>Base URL override (optional)</label><input id="api-base" value=""/>
+<input id="api-target" value="" placeholder="https://api.example.com/openapi.json"/>
+<label>Base URL override (optional)</label><input id="api-base" value="" placeholder="optional — defaults to the spec servers"/>
 </div>
 
 <div id="p-cmd" style="display:none">
-<label>Commands as JSON: [{"name": "...", "cmd": "echo hello {who}", "description": "..."}]</label>
-<textarea id="cmd-tools">[{"name": "greet", "cmd": "echo hello {who}", "description": "Greet someone"}]</textarea>
+<label>Commands as JSON</label>
+<textarea id="cmd-tools" placeholder='[{"name": "disk", "cmd": "df -h {path}", "description": "Show disk usage"}]'></textarea>
 </div>
 
 <div id="p-gh" style="display:none">
 <label>GitHub repo URL or shorthand (only convert repos you trust)</label>
-<input id="gh-target" value="salim-studio/makemcp"/>
-<label>Branch / tag (optional, blank = default branch)</label><input id="gh-ref" value=""/>
-<label>Subdirectory (optional)</label><input id="gh-subdir" value="examples"/>
+<input id="gh-target" value="" placeholder="owner/repo or https://github.com/owner/repo"/>
+<label>Branch / tag (optional, blank = default branch)</label><input id="gh-ref" value="" placeholder="optional"/>
+<label>Subdirectory (optional)</label><input id="gh-subdir" value="" placeholder="optional"/>
 </div>
 
-<label>Server name</label><input id="srv-name" value="my-mcp"/>
+<label>Server name</label><input id="srv-name" value="" placeholder="my-mcp"/>
 <div class="row">
 <button class="go" onclick="analyze()">1 · Analyze</button>
 <button class="ghost" onclick="gen()">2 · Generate server.py</button>
@@ -108,7 +108,10 @@ if(KIND==='gh'){const s={kind:'github',target:document.getElementById('gh-target
 const r=document.getElementById('gh-ref').value;if(r)s.ref=r;
 const d=document.getElementById('gh-subdir').value;if(d)s.subdir=d;
 return{name,sources:[s]};}
-return{name,sources:[{kind:'command',tools:JSON.parse(document.getElementById('cmd-tools').value)}]};}
+return{name,sources:[{kind:'command',tools:parseTools()}]};}
+function parseTools(){const t=document.getElementById('cmd-tools').value.trim();
+if(!t)return[];return JSON.parse(t);}
+function showErr(id,msg){document.getElementById(id).innerHTML='<span class=err>'+esc(msg)+'</span>';}
 async function post(p,b){const r=await fetch(p,{method:'POST',
 headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
 let j;try{j=await r.json();}catch(e){return{error:'HTTP '+r.status+' at '+p};}
@@ -121,10 +124,11 @@ document.getElementById('gh-subdir').value='examples';
 document.getElementById('srv-name').value='makemcp-self';
 document.getElementById('out-tools').textContent='Converting salim-studio/makemcp …';
 await analyze();}
-async function analyze(){const c=cfg();LASTCFG=c;
+async function analyze(){let c;try{c=cfg();}catch(e){showErr('out-tools','Bad commands JSON: '+e.message);return;}
+LASTCFG=c;
 const r=await api('analyze',{config:c});
 const el=document.getElementById('out-tools');
-if(r.error){el.innerHTML='<span class=err>'+esc(r.error)+'</span>';return;}
+if(r.error){showErr('out-tools',r.error);return;}
 el.textContent=r.tools.map(t=>'[tool] '+t.name+
 (t.requires&&t.requires.length?' [needs: '+t.requires.join(', ')+']':'')+
 ' :: '+(t.description||'')).join('\\n')
@@ -136,9 +140,10 @@ async function testcall(){let t;try{t=JSON.parse(document.getElementById('test-c
 catch(e){document.getElementById('out-test').textContent='Bad JSON: '+e;return;}
 const r=await api('test',{config:LASTCFG,tool:t.tool,args:t.args||{}});
 document.getElementById('out-test').textContent=JSON.stringify(r,null,1);}
-async function gen(){const r=await api('generate',{config:cfg()});
+async function gen(){let c;try{c=cfg();}catch(e){showErr('out-code','Bad commands JSON: '+e.message);return;}
+const r=await api('generate',{config:c});
 const el=document.getElementById('out-code');
-if(r.error){el.innerHTML='<span class=err>'+esc(r.error)+'</span>';return;}
+if(r.error){showErr('out-code',r.error);return;}
 el.textContent=r.code;window._code=r.code;}
 function dl(){const b=new Blob([window._code||''],{type:'text/x-python'});
 const a=document.createElement('a');a.href=URL.createObjectURL(b);
